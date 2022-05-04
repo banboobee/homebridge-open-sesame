@@ -8,6 +8,8 @@ import {
   Characteristic,
 } from "homebridge";
 import { Logger } from "homebridge/lib/logger";
+import fakegato from 'fakegato-history';
+import { EveHomeKitTypes } from 'homebridge-lib';
 
 import { Sesame3 } from "./accessories/Sesame3";
 import { SesameBot } from "./accessories/SesameBot";
@@ -28,11 +30,20 @@ export class OpenSesame implements DynamicPlatformPlugin {
   public readonly config: OpenSesamePlatformConfig;
   public readonly accessories: Array<PlatformAccessory> = [];
 
+  public readonly HBLog: Logger;
+  public readonly fakegatoAPI: any;
+  public readonly eve: any;
+
   constructor(
     public readonly log: Logger,
     config: PlatformConfig,
     public readonly api: API,
   ) {
+    // import fakegato-history module and EVE characteristics
+    this.HBLog = log;
+    this.fakegatoAPI = fakegato(api);
+    this.eve = new EveHomeKitTypes(api);
+
     if (!this.verifyConfig(config)) {
       log.error("Invalid configuration. Please check your configuration.");
 

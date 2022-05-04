@@ -4,6 +4,7 @@ import {
   Service,
   PlatformAccessory,
   CharacteristicValue,
+  CharacteristicChange,
 } from "homebridge";
 
 import { CandyClient } from "../CandyClient";
@@ -15,6 +16,7 @@ import { PLATFORM_NAME } from "../settings";
 import { CHSesame2MechStatus } from "../types/API";
 import { Command } from "../types/Command";
 import { CHDevice } from "../types/Device";
+import { hostname } from "os";
 
 export class Sesame3 {
   readonly #client: Client;
@@ -26,6 +28,11 @@ export class Sesame3 {
   #lockState: number;
   #batteryLevel: number;
   #batteryCritical: boolean;
+
+  #historyService: any = null;
+  #lastActivation?: number;
+  #timesOpened: number = 0;
+  #lastReset?: CharacteristicValue;
 
   constructor(
     private readonly platform: OpenSesame,
@@ -102,6 +109,86 @@ export class Sesame3 {
     this.#lockState = platform.Characteristic.LockCurrentState.SECURED;
     this.#batteryLevel = 100;
     this.#batteryCritical = false;
+
+    // Setup EVE history features
+    this.setupHistoryService();
+  }
+
+  /*
+   * Setup EVE history features for lock devices. 
+   */
+  async setupHistoryService(): Promise<void> {
+    const sensor: Service =
+      this.accessory.getService(this.platform.Service.ContactSensor) ||
+      this.accessory.addService(this.platform.Service.ContactSensor, `${this.accessory.displayName} Contact`);
+    this.#historyService = new this.platform.fakegatoAPI('door', this.accessory,
+      {log: this.platform.HBLog, storage: 'fs',
+       filename: `${hostname().split(".")[0]}_${this.accessory.displayName}_persist.json`
+      });
+    sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.OpenDuration);
+    sensor.getCharacteristic(this.platform.eve.Characteristics.OpenDuration)
+      .onGet(() => 0);
+    sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.ClosedDuration);
+    sensor.getCharacteristic(this.platform.eve.Characteristics.ClosedDuration)
+      .onGet(() => 0);
+    sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.TimesOpened);
+    sensor.getCharacteristic(this.platform.eve.Characteristics.TimesOpened)
+      .onGet(() => this.#timesOpened);
+    sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.LastActivation);
+    sensor.getCharacteristic(this.platform.eve.Characteristics.LastActivation)
+      .onGet(() => {
+	const lastActivation = this.#lastActivation ?
+	      this.#lastActivation - this.#historyService.getInitialTime() : 0;
+	//this.platform.log.debug(`Get LastActivation ${this.accessory.displayName}: ${lastActivation}`);
+	return lastActivation;
+      });
+    sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.ResetTotal);
+    sensor.getCharacteristic(this.platform.eve.Characteristics.ResetTotal)
+      .onSet((reset: CharacteristicValue) => {
+	const sensor = this.accessory.getService(this.platform.Service.ContactSensor);
+        this.#timesOpened = 0;
+        this.#lastReset = reset;
+        sensor?.updateCharacteristic(this.platform.eve.Characteristics.TimesOpened, 0);
+        this.platform.log.info(`${this.accessory.displayName}: Reset TimesOpened to 0`);
+        this.platform.log.info(`${this.accessory.displayName}: Set lastReset to ${reset}`);
+      })
+      .onGet(() => {
+	return this.#lastReset ||
+	  this.#historyService.getInitialTime() - Math.round(Date.parse('01 Jan 2001 00:00:00 GMT')/1000);
+      });
+    sensor.getCharacteristic(this.platform.Characteristic.ContactSensorState)
+      .on('change', (event: CharacteristicChange) => {
+	if (event.newValue !== event.oldValue) {
+	  this.platform.log.info(`ContactSensor state on change: ${event}`);
+	  const sensor = this.accessory.getService(this.platform.Service.ContactSensor);
+          const entry = {
+            time: Math.round(new Date().valueOf()/1000),
+            status: event.newValue
+          };
+          this.#lastActivation = entry.time;
+          sensor?.updateCharacteristic(this.platform.eve.Characteristics.LastActivation, this.#lastActivation - this.#historyService.getInitialTime());
+          if (entry.status) {
+            this.#timesOpened++;
+            sensor?.updateCharacteristic(this.platform.eve.Characteristics.TimesOpened, this.#timesOpened);
+          }
+          this.#historyService.addEntry(entry);
+	}
+      });
+    this.updateHistory();
+  }
+
+  async updateHistory() : Promise<void>{
+    const state =
+	  this.#lockState === this.platform.Characteristic.LockCurrentState.SECURED ?
+	  this.platform.Characteristic.ContactSensorState.CONTACT_DETECTED :
+	  this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
+    this.#historyService.addEntry ({
+      time: Math.round(new Date().valueOf()/1000),
+      status: state
+    });
+    setTimeout(() => {
+      this.updateHistory();
+    }, 10 * 60 * 1000);
   }
 
   private getBatteryLevel(): CharacteristicValue {
@@ -114,6 +201,18 @@ export class Sesame3 {
 
   private getLockState(): CharacteristicValue {
     return this.#lockState;
+  }
+
+  private updateContactSensorState() {
+    const sensor = this.accessory.getService(this.platform.Service.ContactSensor);
+    if (sensor) {
+      const state =
+        this.#lockState === this.platform.Characteristic.LockCurrentState.SECURED ?
+        this.platform.Characteristic.ContactSensorState.CONTACT_DETECTED :
+        this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
+      sensor.getCharacteristic(this.platform.Characteristic.ContactSensorState)
+	.updateValue(state);
+    }
   }
 
   private get isWebAPIMode(): boolean {
@@ -213,6 +312,9 @@ export class Sesame3 {
     this.#batteryService
       .getCharacteristic(this.platform.Characteristic.StatusLowBattery)
       .updateValue(this.getStatusLowBattery());
+
+    // Update contact sensor state
+    this.updateContactSensorState();
   }
 
   private async updateToLatestStatus(): Promise<void> {
