@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge Open Sesame",
   "name": "homebridge-open-sesame",
-  "version": "0.4.3",
+  "version": "0.5.0-beta.0",
   "description": "Homebridge plugin for sesame locks.",
   "license": "MIT",
   "repository": {
@@ -50,10 +50,10 @@
     "@trivago/prettier-plugin-sort-imports": "3.2.0",
     "@types/aws-iot-device-sdk": "2.2.4",
     "@types/jest": "27.5.1",
-    "@types/node": "16.11.35",
+    "@types/node": "16.11.36",
     "@types/uuid": "8.3.4",
-    "@typescript-eslint/eslint-plugin": "5.23.0",
-    "@typescript-eslint/parser": "5.23.0",
+    "@typescript-eslint/eslint-plugin": "5.25.0",
+    "@typescript-eslint/parser": "5.25.0",
     "eslint": "8.15.0",
     "eslint-config-prettier": "8.5.0",
     "homebridge": "1.4.1",
