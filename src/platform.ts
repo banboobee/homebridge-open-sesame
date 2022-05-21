@@ -6,6 +6,7 @@ import {
   PlatformConfig,
   Service,
   Characteristic,
+  Logger,
 } from "homebridge";
 import { Logger } from "homebridge/lib/logger";
 import fakegato from 'fakegato-history';
@@ -62,9 +63,21 @@ export class OpenSesame implements DynamicPlatformPlugin {
 
     this.config = config;
 
-    Logger.forceColor();
-    Logger.setDebugEnabled(this.config.debug);
-    this.log = new Logger(log.prefix);
+    if (this.config.debug) {
+      try {
+        /* eslint @typescript-eslint/no-var-requires: 0 */
+        const DebugLogger = require("homebridge/lib/logger").Logger;
+        DebugLogger.forceColor();
+        DebugLogger.setDebugEnabled(this.config.debug);
+        this.log = new DebugLogger(log.prefix);
+      } catch (e) {
+        this.log.error(
+          `Failed to load homebridge/lib/logger.
+          npm install homebridge@latest may resolve the error`,
+        );
+        this.log.debug(`${e}`);
+      }
+    }
 
     this.log.debug("Finished initializing platform:", config.name);
 
