@@ -150,7 +150,7 @@ export class Sesame3 {
     sensor.getCharacteristic(this.platform.eve.Characteristics.LastActivation)
       .onGet(() => {
 	const lastActivation = this.#state.lastActivation ?
-	      this.#state.lastActivation - this.#historyService.getInitialTime() : 0;
+	      Math.max(0, this.#state.lastActivation - this.#historyService.getInitialTime()) : 0;
 	//this.platform.log.debug(`Get LastActivation ${this.accessory.displayName}: ${lastActivation}`);
 	return lastActivation;
       });
@@ -178,7 +178,7 @@ export class Sesame3 {
             status: event.newValue
           };
           this.#state.lastActivation = entry.time;
-          sensor?.updateCharacteristic(this.platform.eve.Characteristics.LastActivation, this.#state.lastActivation - this.#historyService.getInitialTime());
+            sensor?.updateCharacteristic(this.platform.eve.Characteristics.LastActivation, Math.max(0, this.#state.lastActivation - this.#historyService.getInitialTime()));
           if (entry.status) {
             this.#state.timesOpened++;
             sensor?.updateCharacteristic(this.platform.eve.Characteristics.TimesOpened, this.#state.timesOpened);
