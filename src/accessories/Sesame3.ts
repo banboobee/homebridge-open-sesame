@@ -1,7 +1,5 @@
 import { Mutex } from "async-mutex";
 import { hostname } from "os";
-import NodePersist from "node-persist";
-import * as path from "path";
 import {
   APIEvent,
   Service,
@@ -20,25 +18,13 @@ import { CHSesame2MechStatus } from "../types/API";
 import { Command } from "../types/Command";
 import { CHDevice } from "../types/Device";
 
-// Characteristic Values
-interface currentState {
-  lockState: number;
-  batteryLevel: number;
-  batteryCritical: boolean;
-  lastActivation?: number;
-  timesOpened: number;
-  lastReset?: CharacteristicValue;
-};
-
 export class Sesame3 {
   readonly #client: Client;
   readonly #mutex: Mutex;
 
   readonly #lockService: Service;
   readonly #batteryService: Service;
-
-  #state!: currentState;
-
+  
   #historyService: any = null;
 
   constructor(
@@ -109,29 +95,42 @@ export class Sesame3 {
       .onGet(this.getStatusLowBattery.bind(this));
 
     // Start updating status
-    this.updateToLatestStatus();
-    this.subscribe();
+    //this.updateToLatestStatus();	// any reason to fire before initialization?
+    //this.subscribe();
+
+    this.platform.log.debug(
+      `${this.accessory.displayName} history: ${this.sesame?.history}, context: {lockState:${this.accessory.context.lockState}, batteryLevel:${this.accessory.context.batteryLevel}, batteryCritical:${this.accessory.context.batteryCritical}, timesOpened:${this.accessory.context.timesOpened}, lastReset:${this.accessory.context.lastReset}}`
+    );
 
     // Initialize accessory characteristics
-    this.#state = {
-      lockState: platform.Characteristic.LockCurrentState.SECURED,
-      batteryLevel: 100,
-      batteryCritical: false,
-      timesOpened: 0,
-      lastReset: 0
-    }
+    this.accessory.context.lockState ??= platform.Characteristic.LockCurrentState.SECURED;
+    this.accessory.context.batteryLevel ??= 100;
+    this.accessory.context.batteryCritical ??= false;
+    this.accessory.context.timesOpened ??= 0;
+    this.accessory.context.lastReset ??= 0;
 
     // Setup EVE history features
-    this.setupPersist(this.platform.api.user.storagePath());
-    this.setupHistoryService();
+    if (this.sesame?.history == true) {
+      this.setupHistoryService();	// want to await but disallowed.
+    } else {
+      // discards cached values if history is turned off
+      this.accessory.context.batteryLevel = 100;
+      this.accessory.context.batteryCritical = false;
+      this.accessory.context.timesOpened = undefined;
+      this.accessory.context.lastReset = undefined;
+    }
+
+    // Start updating status
+    this.updateToLatestStatus();	// moved to update after initialization.
+    this.subscribe();
   }
 
   /*
-   * Setup EVE history features for lock devices. 
+   * Setup EVE history features for lock devices.
    */
-  async setupHistoryService(): Promise<void> {
+  private async setupHistoryService(): Promise<void> {
     const sensor: Service =
-      this.accessory.getService(this.platform.Service.ContactSensor) ||
+      this.accessory.getService(this.platform.Service.ContactSensor) ??
       this.accessory.addService(this.platform.Service.ContactSensor, `${this.accessory.displayName} Contact`);
     this.#historyService = new this.platform.fakegatoAPI('door', this.accessory,
       {log: this.platform.HBLog, storage: 'fs',
@@ -145,12 +144,12 @@ export class Sesame3 {
       .onGet(() => 0);
     sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.TimesOpened);
     sensor.getCharacteristic(this.platform.eve.Characteristics.TimesOpened)
-      .onGet(() => this.#state.timesOpened);
+      .onGet(() => this.accessory.context.timesOpened);
     sensor.addOptionalCharacteristic(this.platform.eve.Characteristics.LastActivation);
     sensor.getCharacteristic(this.platform.eve.Characteristics.LastActivation)
       .onGet(() => {
-	const lastActivation = this.#state.lastActivation ?
-	      Math.max(0, this.#state.lastActivation - this.#historyService.getInitialTime()) : 0;
+	const lastActivation = this.accessory.context.lastActivation ?
+	      Math.max(0, this.accessory.context.lastActivation - this.#historyService.getInitialTime()) : 0;
 	//this.platform.log.debug(`Get LastActivation ${this.accessory.displayName}: ${lastActivation}`);
 	return lastActivation;
       });
@@ -158,15 +157,15 @@ export class Sesame3 {
     sensor.getCharacteristic(this.platform.eve.Characteristics.ResetTotal)
       .onSet((reset: CharacteristicValue) => {
 	const sensor = this.accessory.getService(this.platform.Service.ContactSensor);
-        this.#state.timesOpened = 0;
-        this.#state.lastReset = reset;
+        this.accessory.context.timesOpened = 0;
+        this.accessory.context.lastReset = reset;
         sensor?.updateCharacteristic(this.platform.eve.Characteristics.TimesOpened, 0);
         this.platform.log.debug(`${this.accessory.displayName}: Reset TimesOpened to 0`);
         this.platform.log.debug(`${this.accessory.displayName}: Set lastReset to ${reset}`);
       })
       .onGet(() => {
-	return this.#state.lastReset ||
-	  this.#historyService.getInitialTime() - Math.round(Date.parse('01 Jan 2001 00:00:00 GMT')/1000);
+	return this.accessory.context.lastReset ??
+	  (this.#historyService.getInitialTime() - Math.round(Date.parse('01 Jan 2001 00:00:00 GMT')/1000));
       });
     sensor.getCharacteristic(this.platform.Characteristic.ContactSensorState)
       .on('change', (event: CharacteristicChange) => {
@@ -177,21 +176,21 @@ export class Sesame3 {
             time: Math.round(new Date().valueOf()/1000),
             status: event.newValue
           };
-          this.#state.lastActivation = entry.time;
-            sensor?.updateCharacteristic(this.platform.eve.Characteristics.LastActivation, Math.max(0, this.#state.lastActivation - this.#historyService.getInitialTime()));
+          this.accessory.context.lastActivation = entry.time;
+            sensor?.updateCharacteristic(this.platform.eve.Characteristics.LastActivation, Math.max(0, this.accessory.context.lastActivation - this.#historyService.getInitialTime()));
           if (entry.status) {
-            this.#state.timesOpened++;
-            sensor?.updateCharacteristic(this.platform.eve.Characteristics.TimesOpened, this.#state.timesOpened);
+            this.accessory.context.timesOpened++;
+            sensor?.updateCharacteristic(this.platform.eve.Characteristics.TimesOpened, this.accessory.context.timesOpened);
           }
           this.#historyService.addEntry(entry);
 	}
       });
-    this.updateHistory();
+    await this.updateHistory();
   }
 
-  async updateHistory() : Promise<void>{
+  private async updateHistory() : Promise<void>{
     const state =
-	  this.#state.lockState === this.platform.Characteristic.LockCurrentState.SECURED ?
+	  this.accessory.context.lockState === this.platform.Characteristic.LockCurrentState.SECURED ?
 	  this.platform.Characteristic.ContactSensorState.CONTACT_DETECTED :
 	  this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
     this.#historyService.addEntry ({
@@ -203,45 +202,23 @@ export class Sesame3 {
     }, 10 * 60 * 1000);
   }
 
-  async setupPersist(user: string): Promise<void> {
-    const persist = NodePersist.create();
-    await persist.init(
-      {dir: path.join(user, 'plugin-persist', 'homebridge-open-sesame'),
-       forgiveParseErrors: true
-      });
-    let state: currentState = (await persist.getItemSync(this.accessory.displayName)) || this.#state;
-    this.platform.log.debug(`${this.accessory.displayName} Persist: ${JSON.stringify(state)}`);
-    this.#state = new Proxy(state, {
-      set: (target:any, key:PropertyKey, value:any, receiver:any):boolean => {
-	//this.platform.log.debug(`${this.accessory.displayName} Persist: key(${String(key)}) value(${String(value)})`);
-	try {
-	  persist.setItemSync(this.accessory.displayName, target)
-	} catch(e) {
-	  this.platform.log.error(`${this.accessory.displayName} is unable to persist the state`, e);
-	}
-	//this.platform.log.debug(`${this.accessory.displayName} Persist: ${JSON.stringify(state)}`);
-	return Reflect.set(target, key, value, receiver);
-      }
-    })
-  }
-
   private getBatteryLevel(): CharacteristicValue {
-    return this.#state.batteryLevel;
+    return this.accessory.context.batteryLevel;
   }
 
   private getStatusLowBattery(): CharacteristicValue {
-    return this.#state.batteryCritical;
+    return this.accessory.context.batteryCritical;
   }
 
   private getLockState(): CharacteristicValue {
-    return this.#state.lockState;
+    return this.accessory.context.lockState;
   }
 
   private updateContactSensorState() {
     const sensor = this.accessory.getService(this.platform.Service.ContactSensor);
     if (sensor) {
       const state =
-        this.#state.lockState === this.platform.Characteristic.LockCurrentState.SECURED ?
+        this.accessory.context.lockState === this.platform.Characteristic.LockCurrentState.SECURED ?
         this.platform.Characteristic.ContactSensorState.CONTACT_DETECTED :
         this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
       sensor.getCharacteristic(this.platform.Characteristic.ContactSensorState)
@@ -313,7 +290,7 @@ export class Sesame3 {
       return;
     }
 
-    const currentLockState = this.#state.lockState;
+    const currentLockState = this.accessory.context.lockState;
     const newLockState = status.isInLockRange
       ? this.platform.Characteristic.LockCurrentState.SECURED
       : this.platform.Characteristic.LockCurrentState.UNSECURED;
@@ -327,9 +304,9 @@ export class Sesame3 {
       `${logPrefix} - Current state: ${newLockState ? "Locked" : "Unlocked"}`,
     );
 
-    this.#state.lockState = newLockState;
-    this.#state.batteryLevel = status.batteryPercentage;
-    this.#state.batteryCritical = status.isBatteryCritical;
+    this.accessory.context.lockState = newLockState;
+    this.accessory.context.batteryLevel = status.batteryPercentage;
+    this.accessory.context.batteryCritical = status.isBatteryCritical;
 
     // Update lock service
     this.#lockService
