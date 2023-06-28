@@ -106,6 +106,7 @@ export class Sesame3 {
     this.accessory.context.lockState ??= platform.Characteristic.LockCurrentState.SECURED;
     this.accessory.context.batteryLevel ??= 100;
     this.accessory.context.batteryCritical ??= false;
+    this.accessory.context.lastActivation ??= 0;
     this.accessory.context.timesOpened ??= 0;
     this.accessory.context.lastReset ??= 0;
 
@@ -116,6 +117,7 @@ export class Sesame3 {
       // discards cached values if history is turned off
       this.accessory.context.batteryLevel = 100;
       this.accessory.context.batteryCritical = false;
+      this.accessory.context.lastActivation = undefined;
       this.accessory.context.timesOpened = undefined;
       this.accessory.context.lastReset = undefined;
     }
